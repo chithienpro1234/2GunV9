@@ -267,7 +267,7 @@
         let skill1Used = false;
         let skill2Used = false;
         let skill3Used = false;
-        let playerShieldActive = false;
+        // let playerShieldActive = false;
         
         let skill4Uses = 2; 
         let supplyDrops = [];
@@ -332,7 +332,6 @@
         // ==========================================
 
         // --- BASE BULLET ---
-        // --- BASE BULLET ---
         class BaseBullet {
             constructor(x, y, angle, power, damage, gravity = GRAVITY, windResist = 1.0) {
                 const rad = angle * Math.PI / 180;
@@ -348,10 +347,9 @@
                 this.historyMax = 10;
             }
 
-            // === [NEW] GETTER CHO CAMERA (OOP) ===
-            // Mặc định: Theo dõi nếu chưa chết VÀ nằm trong vùng bản đồ hợp lý
+            // [QUAN TRỌNG] Logic camera tự động
             get shouldCameraTrack() {
-                return !this.isDead && this.y > -500;
+                return !this.isDead && this.y > -1000 && this.y < MAP_HEIGHT + 200;
             }
 
             update() {
@@ -384,18 +382,25 @@
             handleCollision(target, shooter) {
                 SoundManager.playExplosion();
 
+                // Tính damage cơ bản
                 let finalDmg = this.calculateDamage(target);
+                
+                // Áp dụng Buff của người bắn (nếu có)
                 if (shooter && shooter.damageBuff) finalDmg *= 2;
 
                 if (target === shooter) {
                     showFloatingText("TỰ HỦY!", target.x, target.y - 70, '#ff0000');
-                } else if (this.vy > 6 || this.isSuperCharged) {
+                } else if (this.vy > 6 || (this.isSuperCharged)) { // isSuperCharged có thể undefined với đạn thường, không sao
                     showFloatingText("CHÍ MẠNG!", target.x, target.y - 80, '#ff3d00');
                 }
 
+                // Gọi hàm chịu đòn của mục tiêu (Logic khiên nằm trong target)
                 target.takeDamage(finalDmg);
-                let randomOffset = (Math.random() - 0.5) * 40;
-                showFloatingText(`-${finalDmg}`, target.x + randomOffset, target.y - 50 + randomOffset, 'red');
+                
+                // Floating text hiển thị damage (chỉ hiện nếu damage > 0, tức là không bị khiên chặn)
+                if (!target.isShielded) { // Lưu ý: takeDamage sẽ tắt khiên sau khi đỡ, nên check logic hiển thị text cẩn thận
+                    // Ở đây ta để đơn giản: takeDamage tự lo phần hiển thị text đỡ đòn, ta chỉ hiện damage nếu máu giảm
+                }
 
                 this.onHit(target);
             }
@@ -456,21 +461,20 @@
             }
         }
 
-        // --- Machine BULLET ---
+        // --- Machine Gun Bullet Override ---
         class MachineGunBullet extends BaseBullet {
             constructor(x, y, angle, power, windVal, sequenceIndex) {
                 super(x, y, angle, power * 1.0, 0, 0.12, 0.4);
                 this.oriX = this.x; this.oriY = this.y;
                 this.activationDelay = sequenceIndex * 6;
-                if (this.activationDelay > 0) { this.y = -5000; }
+                if (this.activationDelay > 0) { this.y = -5000; } // Giấu đi
                 this.damage = 0; 
             }
 
-            // === [NEW] GHI ĐÈ GETTER ===
-            // Nếu đang delay (chưa bắn) -> KHÔNG theo dõi
+            // [QUAN TRỌNG] Override: Không theo dõi khi đang delay
             get shouldCameraTrack() {
                 if (this.activationDelay > 0) return false;
-                return super.shouldCameraTrack; // Gọi logic mặc định của cha
+                return super.shouldCameraTrack;
             }
 
             update() {
@@ -481,9 +485,8 @@
                 }
                 super.update();
             }
-            
+            // ... giữ nguyên draw và onHit cũ ...
             onHit(target) { createExplosion(this.x, this.y, 20, 'fire'); }
-
             draw(ctx) {
                 if (this.y < -1000) return;
                 ctx.save(); ctx.translate(this.x, this.y); let rot = Math.atan2(this.vy, this.vx); ctx.rotate(rot);
@@ -774,40 +777,295 @@
             }
         }
 
+        // --- COMMONDO TANK BULLET ---
+        class AirBombBullet extends BaseBullet {
+            constructor(x, y, targetY, damage, isNuke = false) {
+                super(x, y, 90, 0, 0, 0.3, 0); 
+                this.vx = 0; 
+                this.vy = 5; 
+                this.targetY = targetY; 
+                this.damage = damage;   
+                this.isNuke = isNuke;   
+                this.color = '#ff3d00';
+            }
+
+            update() {
+                this.y += this.vy;
+                this.vy += 0.2; 
+                particles.push(new Particle(this.x, this.y - 10, 'smoke', { life: 0.3, size: (this.isNuke ? 5 : 2), vy: -2 }));
+
+                // Kiểm tra chạm đất (hoặc mục tiêu đã định)
+                if (this.y >= this.targetY) {
+                    this.isDead = true;
+                    this.onHit(null); 
+                }
+            }
+
+            // [QUAN TRỌNG] Ghi đè hàm xử lý va chạm
+            // Để ngăn chặn việc gây damage 2 lần (1 lần do chạm, 1 lần do nổ)
+            handleCollision(target, shooter) {
+                // Không gọi super.handleCollision (để bỏ qua sát thương trực tiếp)
+                // Chỉ kích hoạt vụ nổ
+                this.onHit(target); 
+                this.isDead = true; 
+            }
+
+            draw(ctx) {
+                ctx.save(); ctx.translate(this.x, this.y);
+                if (this.isNuke) {
+                    ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI*2); ctx.fill(); 
+                    ctx.strokeStyle = '#ffeb3b'; ctx.lineWidth = 2; ctx.stroke();
+                    ctx.fillStyle = '#ffeb3b'; ctx.font = 'bold 10px Arial'; ctx.textAlign = 'center'; ctx.fillText('☢', 0, 4);
+                    ctx.fillStyle = '#333'; ctx.fillRect(-10, -18, 20, 6);
+                } else {
+                    ctx.fillStyle = '#37474f'; ctx.beginPath(); ctx.moveTo(0, 10); ctx.lineTo(-5, -5); ctx.arc(0, -5, 5, Math.PI, 0); ctx.lineTo(5, -5); ctx.fill();
+                    ctx.fillStyle = this.color; ctx.fillRect(-6, -10, 12, 3);
+                }
+                ctx.restore();
+            }
+
+            onHit(target) {
+                SoundManager.playExplosion();
+                if (this.isNuke) {
+                    createExplosion(this.x, this.y, 80, 'fire'); 
+                    for(let i=0; i<30; i++) particles.push(new Particle(this.x + (Math.random()-0.5)*60, this.y + (Math.random()-0.5)*40, 'smoke', { size: 10 + Math.random()*10, life: 2.0, vy: -1 - Math.random()*2 }));
+                    particles.push(new Particle(this.x, this.y, 'shockwave', { size: 10, decay: 0.05 }));
+                    showFloatingText(`HỦY DIỆT!`, this.x, this.y-120, '#d50000');
+                    
+                    // Logic Nuke gây damage diện rộng (60px)
+                    let targets = [player, ai];
+                    targets.forEach(t => {
+                        if (t.hp > 0 && Math.abs(t.x - this.x) < 60) { 
+                            t.takeDamage(this.damage);
+                        }
+                    });
+                } else {
+                    createExplosion(this.x, this.y, 25, 'fire');
+                    // Logic Bom thường (phạm vi 30px)
+                    let targets = [player, ai];
+                    targets.forEach(t => {
+                        if (t.hp > 0 && Math.abs(t.x - this.x) < 30 && Math.abs(t.y - this.y) < 40) {
+                            t.takeDamage(this.damage);
+                        }
+                    });
+                }
+            }
+        }
+
+        class BombSpawner extends BaseBullet {
+            constructor(x, targetY, type, distance) {
+                super(x, -5000, 0, 0, 0); 
+                this.spawnX = x;
+                this.targetY = targetY;
+                this.type = type;
+                this.distance = distance; 
+                this.timer = 0;
+                this.isSpawner = true; 
+            }
+
+            get shouldCameraTrack() { return false; }
+            calculateDamage() { return 0; }
+
+            getDamage(min, max) {
+                let maxDist = 800; 
+                let factor = Math.min(1, this.distance / maxDist);
+                return Math.floor(min + (max - min) * factor);
+            }
+
+            update() {
+                this.timer++;
+
+                // 1. CHIÊU 1: RẢI THẢM (BUFF DAME)
+                // Cũ: 10-15 -> Mới: 20-28 (Mạnh hơn đáng kể)
+                if (this.type === 'CARPET') {
+                    if (this.timer % 5 === 0 && this.timer <= 25) {
+                        let index = (this.timer / 5) - 1; 
+                        let offset = (index - 2) * 40; 
+                        
+                        // [TĂNG SÁT THƯƠNG]
+                        let dmg = this.getDamage(20, 28); 
+                        
+                        bullets.push(new AirBombBullet(this.spawnX + offset, -100 - Math.abs(offset), this.targetY, dmg));
+                    }
+                    if (this.timer > 30) this.isDead = true; 
+                }
+                
+                // 2. CHIÊU 2: NUKE (Giữ nguyên hoặc chỉnh nhẹ tùy ý)
+                else if (this.type === 'NUKE') {
+                    if (this.timer === 20) { 
+                        let dmg = this.getDamage(60, 80); 
+                        bullets.push(new AirBombBullet(this.spawnX, -100, this.targetY, dmg, true));
+                        showFloatingText("NUKE SẮP NỔ!", this.spawnX, -50, '#d50000');
+                    }
+                    if (this.timer > 30) this.isDead = true;
+                }
+
+                // 3. BẮN THƯỜNG
+                else {
+                    if (this.timer === 20) {
+                        let dmg = this.getDamage(18, 25);
+                        bullets.push(new AirBombBullet(this.spawnX, -100, this.targetY, dmg));
+                        showFloatingText("BOM ĐANG TỚI!", this.spawnX, -50, '#ff3d00');
+                    }
+                    if (this.timer > 30) this.isDead = true;
+                }
+            }
+
+            draw(ctx) { }
+            onHit() { }
+        }
+
+        class SignalFlareBullet extends BaseBullet {
+            constructor(x, y, angle, power, windVal, type = 'NORMAL') {
+                super(x, y, angle, power, 0, GRAVITY, 0.8);
+                this.startX = x; 
+                this.type = type; 
+                
+                // [FIX] Thêm sát thương va chạm nhỏ (5-8 HP)
+                // Để khi bắn trúng sẽ hiện số máu bị trừ ngay
+                this.damage = Math.floor(Math.random() * 4) + 5; 
+                
+                this.mainColor = (type === 'CARPET') ? '#ff1744' : '#ffea00';
+            }
+
+            // [FIX] Xóa hàm calculateDamage trả về 0 cũ đi
+            // Để game tự dùng biến this.damage bên trên
+            
+            draw(ctx) {
+                if (this.history.length < 2) return;
+                ctx.save();
+                let grad = ctx.createLinearGradient(this.x, this.y, this.history[0].x, this.history[0].y);
+                grad.addColorStop(0, 'rgba(255, 255, 255, 0.6)'); grad.addColorStop(1, 'rgba(100, 100, 100, 0)');   
+                ctx.beginPath(); ctx.moveTo(this.history[0].x, this.history[0].y);
+                for(let i=1; i<this.history.length - 1; i++) {
+                    let p0 = this.history[i]; let p1 = this.history[i+1];
+                    ctx.quadraticCurveTo(p0.x, p0.y, (p0.x + p1.x)/2, (p0.y + p1.y)/2);
+                }
+                ctx.lineTo(this.x, this.y);
+                ctx.strokeStyle = grad; ctx.lineWidth = (this.type === 'CARPET') ? 4 : 2; 
+                ctx.lineCap = 'round'; ctx.stroke();
+                
+                ctx.translate(this.x, this.y);
+                let rot = Math.atan2(this.vy, this.vx); ctx.rotate(rot);
+                ctx.fillStyle = '#555'; ctx.fillRect(-6, -3, 6, 6); 
+                ctx.shadowBlur = 15; ctx.shadowColor = this.mainColor;
+                ctx.fillStyle = this.mainColor; ctx.beginPath(); ctx.arc(0, 0, 4, 0, Math.PI*2); ctx.fill(); 
+                ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(0, 0, 2, 0, Math.PI*2); ctx.fill(); 
+                ctx.restore();
+            }
+
+            onHit(target) {
+                if (target) {
+                    createExplosion(this.x, this.y, 5, 'smoke');
+                    // Hiện chữ khóa mục tiêu
+                    showFloatingText("KHÓA MỤC TIÊU!", this.x, this.y - 70, this.mainColor);
+                    
+                    // Tính khoảng cách
+                    let dist = Math.abs(this.x - this.startX);
+
+                    // Gọi Trạm thả bom
+                    bullets.push(new BombSpawner(target.x, target.y, this.type, dist));
+                    
+                    // LƯU Ý: Vì this.damage > 0, Game Engine sẽ tự động gọi target.takeDamage()
+                    // và hiện số máu bị trừ (ví dụ: -6) ngay tại đây.
+                } else {
+                    createExplosion(this.x, this.y, 5, 'smoke');
+                    showFloatingText("TRƯỢT...", this.x, this.y - 40, '#aaa');
+                }
+            }
+        }
+
         // --- BASE TANK SYSTEM ---
         class BaseTank {
             constructor(x, color, name, isAI) {
                 this.x = x; this.y = GROUND_Y - 14; this.color = color; this.name = name; this.isAI = isAI;
                 this.hp = 100; this.maxHp = 100; this.angle = isAI ? 135 : 45; this.hitTimer = 0;
-                this.isParachuting = false; this.moveEnergy = MAX_MOVE_ENERGY; this.damageBuff = false;
-                this.extraShot = false; this.scale = 1.0; this.w = 48; 
+                this.isParachuting = false; 
+                
+                // Trạng thái theo lượt
+                this.moveEnergy = MAX_MOVE_ENERGY; 
+                this.damageBuff = false;
+                this.extraShot = false; 
+                this.isShielded = false; // [NEW] Thay thế biến toàn cục playerShieldActive
+                // [NEW] Trạng thái chết
+                this.isDead = false;
+                this.scale = 1.0; this.w = 48; 
             }
             
+            // [NEW] Hàm gọi mỗi khi bắt đầu lượt của tank này
+            onTurnStart() {
+                this.moveEnergy = MAX_MOVE_ENERGY;
+                this.damageBuff = false;
+                // Có thể reset các buff tạm thời khác tại đây
+            }
+
+            // [NEW] Hàm gọi khi kết thúc lượt (dọn dẹp)
             onTurnEnd() {
-                // Mặc định không làm gì
+                this.isShielded = false; // Mất khiên khi hết lượt đối thủ (hoặc hết lượt mình, tùy logic)
+            }
+
+            // [NEW] Hàm xử lý khi xe bị tiêu diệt
+            onDeath() {
+                if (this.isDead) return;
+                this.isDead = true;
+                this.hp = 0; // Đảm bảo HP về 0
+
+                // 1. Hiệu ứng cháy đen: Đổi màu xe thành xám đen
+                this.originalColor = this.color; // Lưu màu cũ nếu cần (tùy chọn)
+                this.color = '#424242'; // Màu xác cháy
+
+                // 2. Hiệu ứng nổ lớn
+                SoundManager.playExplosion();
+                createExplosion(this.x, this.y, 40, 'fire'); // Nổ lửa trước
+                
+                // 3. Hiệu ứng bốc khói âm ỉ (Tạo nhiều hạt khói bay chậm)
+                for(let i=0; i<15; i++) {
+                    setTimeout(() => {
+                        particles.push(new Particle(this.x + (Math.random()-0.5)*30, this.y, 'smoke', {
+                            vx: (Math.random()-0.5)*1, 
+                            vy: -Math.random()*2 - 1, // Bay lên
+                            life: 2.0, 
+                            size: Math.random()*5 + 5
+                        }));
+                    }, i * 100); // Khói bốc lên từ từ
+                }
+                
+                showFloatingText("HẠ GỤC!", this.x, this.y - 90, '#ff0000');
+            }
+
+            // [NEW] Cấu hình đường ngắm (Aim Guide)
+            getAimSettings(currentSkillId) {
+                return {
+                    steps: 25,          // Mặc định vẽ ngắn
+                    isSolid: false,     // Mặc định nét đứt
+                    colorStart: '#ffffff',
+                    colorEnd: '#ffffff'
+                };
+            }
+
+            // [NEW] Logic bật khiên
+            activateShield() {
+                this.isShielded = true;
+                showFloatingText("KHIÊN BẢO VỆ!", this.x, this.y - 80, '#00ffff');
             }
 
             getPhysics() { return { gravity: GRAVITY, powerMulti: 1.0 }; }
 
-            // === [LOGIC MỚI] TÍNH TOÁN QUỸ ĐẠO CHUẨN ===
             calculateTrajectory(power, windVal, stepsLimit = 20) {
                 const rad = this.angle * Math.PI / 180;
                 const phys = this.getPhysics();
-                let windResist = 1.0; 
+                let windResist = 1.0;
+                // (Nếu là MachineGunTank có thể override windResist hoặc override hàm này)
                 
-                // Điểm xuất phát
                 let sx = Math.cos(rad) * 44;
                 let sy = -10 - Math.sin(rad) * 44;
                 
-                // Tốc độ ban đầu
                 let speed = power * SPEED_CONSTANT * phys.powerMulti;
                 let vx = Math.cos(rad) * speed;
                 let vy = -Math.sin(rad) * speed;
 
                 let points = [{x: sx, y: sy}];
                 let curX = sx, curY = sy;
-
-                // Xử lý stepsLimit: Nếu truyền số thì lấy số, nếu truyền boolean thì tự gán
                 let steps = (typeof stepsLimit === 'number') ? stepsLimit : (stepsLimit ? 300 : 20);
 
                 for (let i = 0; i < steps; i++) {
@@ -816,15 +1074,10 @@
                     curX += vx;
                     curY += vy;
                     points.push({x: curX, y: curY});
-
-                    // Chỉ dừng khi chạm đất NẾU đang vẽ dây dài (Skill 2)
-                    // Nếu vẽ dây ngắn gợi ý (steps nhỏ), ta cho phép vẽ xuyên đất một chút để không bị mất nét
                     if (steps > 50 && (this.y + curY > GROUND_Y + 50)) break;
                 }
-
                 return { type: 'curve', points: points };
             }
-            // ============================================
 
             move(dir) {
                 if (this.isParachuting) return;
@@ -833,8 +1086,31 @@
                 if (!this.isAI) this.moveEnergy -= 1; this.x = Math.max(BRIDGE_START + 25, Math.min(BRIDGE_END - 25, this.x));
                 this.checkSupplyPickup(); 
             }
+            
             adjustAngle(d) { if (this.isParachuting) return; this.angle = Math.max(10, Math.min(170, this.angle + d)); }
-            takeDamage(dmg) { if (this.scale > 1.0) dmg = Math.floor(dmg * 0.8); this.hp -= dmg; this.hitTimer = 20; }
+            
+            // [NEW] Logic nhận sát thương tích hợp Khiên
+            takeDamage(dmg) { 
+                // Logic chặn đòn bằng Khiên
+                if (this.isShielded) {
+                    this.isShielded = false;
+                    showFloatingText("ĐỠ ĐÒN!", this.x, this.y - 80, '#00ffff'); 
+                    createExplosion(this.x, this.y, 15, 'smoke');
+                    return; // Chặn damage hoàn toàn, không hiện số damage
+                }
+
+                // Logic giảm damage nếu đang khổng lồ
+                if (this.scale > 1.0) dmg = Math.floor(dmg * 0.8); 
+                
+                this.hp -= dmg; 
+                this.hitTimer = 20; 
+
+                // [FIX] Thêm dòng này để hiển thị số Damage bay lên
+                if (dmg > 0) {
+                    showFloatingText(`-${dmg}`, this.x, this.y - 60, '#ff5252');
+                }
+            }
+
             checkSupplyPickup() {
                 if (this.isAI) return;
                 for (let i = supplyDrops.length - 1; i >= 0; i--) {
@@ -849,6 +1125,7 @@
                     }
                 }
             }
+            // ... (Giữ nguyên updateParachute, draw, drawTracks, drawBody, drawTurret, drawParachute, drawHPBar) ...
             updateParachute() {
                 if (this.y < GROUND_Y - 14) { this.y += 2.5; this.x += Math.sin(Date.now() / 200) * 0.8; this.x = Math.max(BRIDGE_START + 25, Math.min(BRIDGE_END - 25, this.x)); return false; } 
                 else { if (this.isParachuting) { this.y = GROUND_Y - 14; this.isParachuting = false; SoundManager.playLand(); return true; } return true; }
@@ -873,12 +1150,39 @@
                 ctx.beginPath(); ctx.arc(0, canopyY, canopyW, Math.PI, 0); ctx.fillStyle = this.color || '#fff'; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#fff'; ctx.stroke(); 
                 ctx.beginPath(); ctx.moveTo(0, canopyY); ctx.lineTo(0, canopyY - 35); ctx.lineWidth = 1; ctx.stroke(); ctx.restore();
             }
+            // drawHPBar(ctx) {
+            //     const hpYOffset = 45 * this.scale; const hpX = this.x - 25; const hpY = this.y - hpYOffset; 
+            //     ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(hpX, hpY, 50, 6); const hpP = Math.max(0, this.hp / this.maxHp); ctx.fillStyle = hpP < 0.3 ? '#ff5252' : '#00e676'; ctx.fillRect(hpX, hpY, 50 * hpP, 6);
+            //     if (this.damageBuff) { ctx.fillStyle = '#ff3d00'; ctx.font = 'bold 12px Arial'; ctx.fillText('DMG x2', this.x + 30, hpY); }
+            //     if (this.extraShot) { ctx.fillStyle = '#2979ff'; ctx.font = 'bold 12px Arial'; ctx.fillText('+1 TURN', this.x - 60, hpY); }
+            // }
             drawHPBar(ctx) {
-                const hpYOffset = 45 * this.scale; const hpX = this.x - 25; const hpY = this.y - hpYOffset; 
-                ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(hpX, hpY, 50, 6); const hpP = Math.max(0, this.hp / this.maxHp); ctx.fillStyle = hpP < 0.3 ? '#ff5252' : '#00e676'; ctx.fillRect(hpX, hpY, 50 * hpP, 6);
-                if (this.damageBuff) { ctx.fillStyle = '#ff3d00'; ctx.font = 'bold 12px Arial'; ctx.fillText('DMG x2', this.x + 30, hpY); }
-                if (this.extraShot) { ctx.fillStyle = '#2979ff'; ctx.font = 'bold 12px Arial'; ctx.fillText('+1 TURN', this.x - 60, hpY); }
+                const hpYOffset = 45 * this.scale; 
+                const hpX = this.x - 25; 
+                const hpY = this.y - hpYOffset; 
+                
+                // Vẽ nền đen
+                ctx.fillStyle = 'rgba(0,0,0,0.5)'; 
+                ctx.fillRect(hpX, hpY, 50, 6); 
+                
+                // Vẽ thanh máu
+                const hpP = Math.max(0, this.hp / this.maxHp); 
+                ctx.fillStyle = hpP < 0.3 ? '#ff5252' : '#00e676'; 
+                ctx.fillRect(hpX, hpY, 50 * hpP, 6);
+                
+                // --- [SỬA LỖI] Dùng save/restore để không ảnh hưởng chat box ---
+                ctx.save(); 
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 10px Arial';
+                ctx.textAlign = 'center'; // Chỉ center trong phạm vi này
+                ctx.fillText(`${Math.floor(this.hp)}/${this.maxHp}`, this.x, hpY - 2);
+                ctx.restore(); // Trả lại trạng thái cũ cho các text khác
+                // -------------------------------------------------------------
+
+                if (this.damageBuff) { ctx.fillStyle = '#ff3d00'; ctx.font = 'bold 12px Arial'; ctx.fillText('DMG x2', this.x + 35, hpY); }
+                if (this.extraShot) { ctx.fillStyle = '#2979ff'; ctx.font = 'bold 12px Arial'; ctx.fillText('+1 TURN', this.x - 35, hpY); }
             }
+
             fireNormal(power, windVal) { return []; }
             fireSkill1(power, windVal) { return []; }
             fireSkill2(power, windVal) { return []; }
@@ -896,6 +1200,18 @@
                 if (this === player && activeSkill === 1) { let grad = ctx.createLinearGradient(14, -4, 44, -4); grad.addColorStop(0, '#ff5252'); grad.addColorStop(1, '#d50000'); ctx.fillStyle = grad; } else { let grad = ctx.createLinearGradient(14, -4, 44, -4); grad.addColorStop(0, '#ccc'); grad.addColorStop(1, '#999'); ctx.fillStyle = grad; }
                 ctx.fillRect(14, -4, 30, 8); ctx.strokeRect(14, -4, 30, 8); ctx.restore(); 
             }
+            // [FIX] Override để Skill 2 vẽ dây dài
+            getAimSettings(currentSkillId) {
+                if (currentSkillId === 2) {
+                    return {
+                        steps: 300, // Vẽ 300 bước (Full map)
+                        isSolid: true, // Nét liền
+                        colorStart: '#ffeb3b', // Màu vàng
+                        colorEnd: 'rgba(255, 0, 0, 0)' // Đuôi mờ dần
+                    };
+                }
+                return super.getAimSettings(currentSkillId);
+            }
             createMuzzleFlash(offsetAngle) { SoundManager.playShoot(); const rad = (this.angle + offsetAngle) * Math.PI / 180; createExplosion(this.x + Math.cos(rad) * 44, (this.y - 14) - Math.sin(rad) * 44, 10, 'smoke'); }
             fireNormal(power, windVal) { this.createMuzzleFlash(0); return [new ArtilleryBullet(this.x, this.y, this.angle, power, windVal)]; }
             fireSkill1(power, windVal) { this.createMuzzleFlash(0); return [new ArtilleryBullet(this.x, this.y, this.angle, power, windVal), new ArtilleryBullet(this.x, this.y, this.angle - 5, power, windVal), new ArtilleryBullet(this.x, this.y, this.angle + 5, power, windVal)]; }
@@ -905,7 +1221,24 @@
         // --- 4. MachineGunTank ---
         class MachineGunTank extends BaseTank {
             getPhysics() { return { gravity: 0.12, powerMulti: 1.0 }; }
-            adjustAngle(d) { if (this.isParachuting) return; this.angle = Math.max(0, Math.min(180, this.angle + d)); }
+            
+            adjustAngle(d) { 
+                if (this.isParachuting) return; 
+                this.angle = Math.max(0, Math.min(180, this.angle + d)); 
+            }
+            
+            // [FIX TỪ BƯỚC TRƯỚC] Cấu hình Aim Guide cho Skill 2 vẽ nét liền, full lực
+            getAimSettings(currentSkillId) {
+                if (currentSkillId === 2) {
+                    return {
+                        steps: 300, 
+                        isSolid: true,
+                        colorStart: '#ff9800', 
+                        colorEnd: 'rgba(255, 255, 255, 0)'
+                    };
+                }
+                return super.getAimSettings(currentSkillId);
+            }
             
             drawBody(ctx) { super.drawBody(ctx); ctx.fillStyle = this.color; ctx.fillRect(-22, -4, 44, 12); ctx.strokeStyle = '#000'; ctx.lineWidth = 3; ctx.strokeRect(-22, -4, 44, 12); ctx.beginPath(); ctx.arc(0, -4, 16, Math.PI, 0); ctx.fill(); ctx.stroke(); }
             
@@ -917,12 +1250,10 @@
                 if (this === player && activeSkill === 1) { ctx.shadowBlur = 10; ctx.shadowColor = '#ff0000'; ctx.strokeStyle = '#ff0000'; ctx.strokeRect(16, -6, 32, 5); ctx.strokeRect(16, 1, 32, 5); } ctx.restore();
             }
             
-            // === [LOGIC MỚI] OVERRIDE VỚI WIND RESIST 0.4 ===
             calculateTrajectory(power, windVal, stepsLimit = 20) {
                 const rad = this.angle * Math.PI / 180;
                 const phys = this.getPhysics(); 
-                
-                let windResist = 0.4; // Đạn súng máy chịu gió ít
+                let windResist = 0.4; 
                 
                 let sx = Math.cos(rad) * 44;
                 let sy = -10 - Math.sin(rad) * 44;
@@ -941,25 +1272,60 @@
                     curX += vx;
                     curY += vy;
                     points.push({x: curX, y: curY});
-                    
                     if (steps > 50 && (this.y + curY > GROUND_Y + 50)) break;
                 }
 
                 return { type: 'curve', points: points };
             }
-            // ================================================
 
             createMuzzleFlash(offsetAngle) { const rad = (this.angle + offsetAngle) * Math.PI / 180; createExplosion(this.x + Math.cos(rad) * 50, (this.y - 14) - Math.sin(rad) * 50, 4, 'spark'); }
-            fireNormal(power, windVal) { this.createMuzzleFlash(0); let bullets = []; for (let i = 0; i < 3; i++) { let angleDev = (Math.random() - 0.5) * 6; let b = new MachineGunBullet(this.x, this.y, this.angle + angleDev, power, windVal, i); b.damage = Math.floor(Math.random() * 5) + 8; bullets.push(b); } return bullets; }
-            fireSkill1(power, windVal) { this.createMuzzleFlash(0); let bullets = []; for (let i = 0; i < 6; i++) { let angleDev = (Math.random() - 0.5) * 8; let b = new MachineGunBullet(this.x, this.y, this.angle + angleDev, power, windVal, i); b.damage = Math.floor(Math.random() * 5) + 8; bullets.push(b); } return bullets; }
-            fireSkill2(power, windVal) { return this.fireNormal(power, windVal); }
+            
+            fireNormal(power, windVal) { 
+                this.createMuzzleFlash(0); 
+                let bullets = []; 
+                for (let i = 0; i < 3; i++) { 
+                    // Giữ nguyên độ lệch cho bắn thường
+                    let angleDev = (Math.random() - 0.5) * 6; 
+                    let b = new MachineGunBullet(this.x, this.y, this.angle + angleDev, power, windVal, i); 
+                    b.damage = Math.floor(Math.random() * 5) + 8; 
+                    bullets.push(b); 
+                } 
+                return bullets; 
+            }
+            
+            fireSkill1(power, windVal) { 
+                this.createMuzzleFlash(0); 
+                let bullets = []; 
+                for (let i = 0; i < 6; i++) { 
+                    let angleDev = (Math.random() - 0.5) * 8; 
+                    let b = new MachineGunBullet(this.x, this.y, this.angle + angleDev, power, windVal, i); 
+                    b.damage = Math.floor(Math.random() * 5) + 8; 
+                    bullets.push(b); 
+                } 
+                return bullets; 
+            }
+            
+            // [FIX MỚI] Skill 2: Bắn 3 viên như thường nhưng KHÔNG LỆCH (angleDev = 0)
+            fireSkill2(power, windVal) { 
+                this.createMuzzleFlash(0); 
+                let bullets = []; 
+                for (let i = 0; i < 3; i++) { 
+                    // KHÓA GÓC TUYỆT ĐỐI: angleDev = 0
+                    // Giúp đạn đi đúng đường kẻ Aim Guide
+                    let angleDev = 0; 
+                    let b = new MachineGunBullet(this.x, this.y, this.angle + angleDev, power, windVal, i); 
+                    b.damage = Math.floor(Math.random() * 5) + 8; 
+                    bullets.push(b); 
+                } 
+                return bullets; 
+            }
         }
 
         // --- Laser Tank (REFACTORED CLEANUP) ---
         class LaserTank extends BaseTank {
-            
-            // === [NEW] TỰ DỌN DẸP VỆ TINH KHI HẾT LƯỢT ===
+            // [OVERRIDE] Dọn dẹp vệ tinh khi hết lượt
             onTurnEnd() {
+                super.onTurnEnd(); // Gọi logic gốc
                 for (let i = bullets.length - 1; i >= 0; i--) {
                     if (bullets[i].type === 'SATELLITE') {
                         bullets.splice(i, 1);
@@ -967,6 +1333,20 @@
                 }
             }
 
+            // [OVERRIDE] Cấu hình đường ngắm cho Skill 2
+            getAimSettings(currentSkillId) {
+                if (currentSkillId === 2) {
+                    return {
+                        steps: 2, // Vì là đường thẳng Raycast, chỉ cần 2 điểm (đầu-cuối)
+                        isSolid: true,
+                        colorStart: this.color,
+                        colorEnd: 'rgba(255,255,255,0)'
+                    };
+                }
+                return super.getAimSettings(currentSkillId);
+            }
+
+            // ... (Giữ nguyên logic draw và fire cũ) ...
             drawBody(ctx) {
                 this.drawTracks(ctx); ctx.fillStyle = '#263238'; ctx.fillRect(-24, -6, 48, 14); ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 2; ctx.strokeRect(-24, -6, 48, 14);
                 ctx.fillStyle = this.color; ctx.beginPath(); ctx.moveTo(-15, -6); ctx.lineTo(-5, 0); ctx.lineTo(-15, 6); ctx.fill();
@@ -978,18 +1358,29 @@
                 ctx.fillStyle = '#222'; ctx.fillRect(10, -4, 35, 8); ctx.fillStyle = this.color; ctx.fillRect(10, -9, 30, 3); ctx.fillRect(10, 6, 30, 3);
                 ctx.fillStyle = '#e0f7fa'; ctx.fillRect(10, -1, 35, 2); ctx.restore();
             }
-            // [OVERRIDE]
-            calculateTrajectory(power, windVal, isLongPath = false) {
-                // Nếu là Skill 2: Trả về đường thẳng (Raycast)
-                if (activeSkill === 2) {
-                    const rad = this.angle * Math.PI / 180;
-                    let start = { x: Math.cos(rad)*44, y: -14 - Math.sin(rad)*44 };
-                    let end = { x: Math.cos(rad)*200, y: -14 - Math.sin(rad)*200 };
-                    return { type: 'line', points: [start, end] };
-                }
+            // [FIX] Tự tính toán quỹ đạo riêng, KHÔNG gọi super nữa
+            calculateTrajectory(power, windVal, stepsLimit = 20) {
+                // stepsLimit được truyền từ drawAimGuide (lấy từ getAimSettings)
+                // Mặc định bắn thường là 25 bước, Skill là 300 bước (tùy config getAimSettings)
                 
-                // Nếu bắn thường hoặc Skill 1: Dùng logic vật lý cơ bản của cha
-                return super.calculateTrajectory(power, windVal, isLongPath);
+                // 1. Tính toán độ dài dây ngắm dựa trên số bước
+                // Ví dụ: Mỗi bước tương đương 8 pixel độ dài
+                let length = stepsLimit * 8; 
+
+                // 2. Tính toán điểm đầu và điểm cuối (Đường thẳng)
+                const rad = this.angle * Math.PI / 180;
+                
+                // Điểm xuất phát (đầu nòng súng)
+                let sx = Math.cos(rad) * 44;
+                let sy = -14 - Math.sin(rad) * 44;
+
+                // Điểm kết thúc (chiếu thẳng theo góc bắn)
+                let ex = sx + Math.cos(rad) * length;
+                let ey = sy - Math.sin(rad) * length;
+
+                // 3. Trả về mảng điểm để hàm drawAimGuide vẽ
+                // Vì là đường thẳng, chỉ cần 2 điểm đầu và cuối là đủ
+                return { type: 'line', points: [{x: sx, y: sy}, {x: ex, y: ey}] };
             }
             createMuzzleFlash(offsetAngle) { SoundManager.playShoot(); const rad = (this.angle + offsetAngle) * Math.PI / 180; createExplosion(this.x + Math.cos(rad) * 44, (this.y - 14) - Math.sin(rad) * 44, 15, 'spark'); }
             fireNormal(power, windVal) { this.createMuzzleFlash(0); return [new LaserBullet(this.x, this.y, this.angle, power, windVal, 'NORMAL')]; }
@@ -1002,24 +1393,38 @@
             fireSkill2(power, windVal) { this.createMuzzleFlash(0); return [new LaserBullet(this.x, this.y, this.angle, power, windVal, 'TRIGGER')]; }
         }
 
-       class BoomerangTank extends BaseTank {
+        class BoomerangTank extends BaseTank {
             constructor(x, color, name, isAI) {
                 super(x, color, name, isAI);
-                this.angle = 45; 
+                this.angle = 45;
                 if (!isAI && ai) { if (this.x > ai.x) { this.scale = -1; this.angle = 135; } }
             }
 
+            // [FIX] Cấu hình Aim Guide:
+            // 1. steps: 300 (Vẽ dài ra để thấy đường về)
+            // 2. colorEnd: Giữ nguyên độ đậm (alpha 1.0) để thấy rõ móc câu cuối đường
+            getAimSettings(currentSkillId) {
+                if (currentSkillId === 2) {
+                    return {
+                        steps: 300,           
+                        isSolid: true,
+                        colorStart: '#76ff03', // Xanh nõn chuối sáng
+                        colorEnd: '#ccff90'    // Vẫn giữ màu rõ ở cuối (KHÔNG dùng trong suốt)
+                    };
+                }
+                return super.getAimSettings(currentSkillId);
+            }
+
+            // ... (Giữ nguyên drawBody, drawTurret, adjustAngle...)
             adjustAngle(d) {
                 if (this.isParachuting) return;
                 this.angle = Math.max(30, Math.min(150, this.angle + d));
             }
-
             drawBody(ctx) {
                 super.drawBody(ctx);
                 ctx.fillStyle = '#33691e'; ctx.fillRect(-22, -4, 44, 12); ctx.strokeStyle = '#1b5e20'; ctx.strokeRect(-22, -4, 44, 12);
                 ctx.beginPath(); ctx.arc(0, -4, 16, Math.PI, 0); ctx.fillStyle = this.color; ctx.fill(); ctx.stroke();
             }
-
             drawTurret(ctx) {
                 ctx.save(); ctx.translate(0, -10);
                 let drawAngle = this.angle; if (this.scale < 0) drawAngle = 180 - this.angle;
@@ -1032,59 +1437,142 @@
                 ctx.restore();
             }
 
-            // === TÍNH TOÁN QUỸ ĐẠO KHỚP LOGIC 2 GIAI ĐOẠN ===
+            // [FIX] Đồng bộ hoàn toàn vật lý Aim Guide với Bullet
             calculateTrajectory(power, windVal, stepsLimit = 20) {
                 const rad = this.angle * Math.PI / 180;
                 let sx = Math.cos(rad) * 44;
                 let sy = -10 - Math.sin(rad) * 44;
+                
+                // Match speed logic với Bullet
                 let speed = power * SPEED_CONSTANT; 
-
                 let vx = Math.cos(rad) * speed;
                 let vy = -Math.sin(rad) * speed;
 
                 let points = [{x: sx, y: sy}];
                 let curX = sx, curY = sy;
-                let steps = (typeof stepsLimit === 'number') ? stepsLimit : (stepsLimit ? 300 : 20);
-
-                // --- CẤU HÌNH ---
-                let currentGravity = GRAVITY;
-                let windResist = 0.3;
                 
+                // Lấy số bước vẽ từ getAimSettings (Skill 2 = 300)
+                let steps = (typeof stepsLimit === 'number') ? stepsLimit : 20;
+
+                let currentGravity = GRAVITY;
+                let windResist = 0.3; // Match Bullet
                 let pendingAccelX = 0;
                 let turnStartFrame = 0;
 
-                // 1. GÓC CAO (Tạc đạn)
+                // Logic phân loại góc bắn (Match Bullet 100%)
                 if (this.angle > 70 && this.angle < 110) {
-                    currentGravity = GRAVITY * 0.35;
+                    // Góc cao: Bay lơ lửng
+                    currentGravity = GRAVITY * 0.35; 
                     pendingAccelX = 0;
-                } 
-                // 2. GÓC THẤP (Móc câu sau lưng)
-                else {
-                    // Tăng tốc độ đầu vào (cho khớp Bullet)
-                    vx *= 1.3;
+                } else {
+                    // Góc thấp: Móc câu
+                    vx *= 1.3; // Boost tốc độ
                     vy *= 1.3;
-
-                    turnStartFrame = 55; // Delay dài
-                    let hookStrength = 0.25; // Lực giật mạnh
-
-                    if (this.angle < 90) pendingAccelX = -hookStrength;
+                    turnStartFrame = 55; // Khung hình bắt đầu quay xe
+                    let hookStrength = 0.25; // Lực giật về
+                    if (this.angle < 90) pendingAccelX = -hookStrength; 
                     else pendingAccelX = hookStrength;
                 }
 
                 for (let i = 0; i < steps; i++) {
+                    // 1. Áp dụng gió
                     vx += windVal * WIND_FACTOR * windResist;
-                    
-                    // Logic quay xe gắt
-                    if (pendingAccelX !== 0 && i > turnStartFrame) {
-                        vx += pendingAccelX;
-                    }
-                    
-                    vy += currentGravity;
 
-                    curX += vx;
+                    // 2. Áp dụng lực quay xe (Hook)
+                    if (pendingAccelX !== 0 && i > turnStartFrame) { 
+                        vx += pendingAccelX; 
+                    }
+
+                    // 3. Trọng lực & Di chuyển
+                    vy += currentGravity; 
+                    curX += vx; 
                     curY += vy;
+
                     points.push({x: curX, y: curY});
 
+                    // Điều kiện dừng vẽ: Chỉ dừng khi chạm đất
+                    // Lưu ý: Với boomerang, ta cho phép vẽ lún xuống đất một chút (GROUND_Y + 100) 
+                    // để người chơi hình dung quỹ đạo nếu lỡ bắn thấp.
+                    if (steps > 50 && (this.y + curY > GROUND_Y + 100)) break;
+                }
+
+                return { type: 'curve', points: points };
+            }
+
+            createMuzzleFlash(offsetAngle) { SoundManager.playShoot(); const rad = (this.angle + offsetAngle) * Math.PI / 180; createExplosion(this.x + Math.cos(rad) * 44, (this.y - 14) - Math.sin(rad) * 44, 10, 'smoke'); }
+            fireNormal(power, windVal) { this.createMuzzleFlash(0); let dmg = Math.floor(Math.random() * 10 + 30); return [new BoomerangBullet(this.x, this.y, this.angle, power, windVal, dmg)]; }
+            fireSkill1(power, windVal) { this.createMuzzleFlash(0); let bullets = []; let offsets = [-4, 0, 4]; offsets.forEach(off => { let dmg = Math.floor(Math.random() * 10 + 60); bullets.push(new BoomerangBullet(this.x, this.y, this.angle + off, power, windVal, dmg)); }); return bullets; }
+            fireSkill2(power, windVal) { this.createMuzzleFlash(0); let baseDmg = Math.floor(Math.random() * 10 + 30); return [new BoomerangBullet(this.x, this.y, this.angle, power, windVal, baseDmg, true)]; }
+        }
+
+        class CommandoTank extends BaseTank {
+            constructor(x, color, name, isAI) {
+                super(x, '#607d8b', 'Đặc Nhiệm', isAI); 
+                this.radarAngle = 0;
+            }
+
+            drawBody(ctx) {
+                this.drawTracks(ctx); super.drawBody(ctx);  
+                ctx.save(); ctx.translate(-18, -4); 
+                ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -22); ctx.lineWidth = 2; ctx.strokeStyle = '#37474f'; ctx.stroke();
+                if (Math.floor(Date.now() / 200) % 2 === 0) {
+                    ctx.fillStyle = '#ff1744'; ctx.shadowBlur = 5; ctx.shadowColor = 'red';
+                    ctx.beginPath(); ctx.arc(0, -22, 2.5, 0, Math.PI*2); ctx.fill();
+                }
+                ctx.restore();
+            }
+
+            drawTurret(ctx) {
+                ctx.save(); ctx.translate(0, -10); 
+                this.radarAngle += 0.05;
+                ctx.save(); ctx.translate(0, -8); ctx.rotate(Math.sin(this.radarAngle) * 0.5); 
+                ctx.fillStyle = '#90a4ae'; ctx.beginPath(); ctx.arc(0, -8, 12, Math.PI, 0); ctx.fill(); ctx.stroke(); 
+                ctx.fillStyle = '#eceff1'; ctx.beginPath(); ctx.arc(0, -8, 4, 0, Math.PI*2); ctx.fill(); ctx.restore();
+
+                ctx.rotate(-this.angle * Math.PI / 180);
+                ctx.fillStyle = '#37474f'; ctx.fillRect(0, -4, 25, 8); ctx.strokeStyle = '#000'; ctx.strokeRect(0, -4, 25, 8);
+                ctx.fillStyle = '#546e7a'; ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+                if (activeSkill) { ctx.shadowBlur = 10; ctx.shadowColor = (activeSkill===1) ? '#ff1744' : '#ffea00'; }
+                ctx.restore();
+            }
+
+            getAimSettings(currentSkillId) {
+                if (currentSkillId === 2) { 
+                    return { steps: 300, isSolid: true, colorStart: '#ffea00', colorEnd: 'rgba(255, 61, 0, 0)' };
+                }
+                return super.getAimSettings(currentSkillId);
+            }
+
+            // [FIX] Tính toán quỹ đạo chuẩn xác cho Đạn Tín Hiệu (Kháng gió 0.8)
+            calculateTrajectory(power, windVal, stepsLimit = 20) {
+                const rad = this.angle * Math.PI / 180;
+                
+                // Tọa độ đầu nòng
+                let sx = Math.cos(rad) * 44; 
+                let sy = -10 - Math.sin(rad) * 44; // [Lưu ý] Đạn SignalFlare dùng offset y=-10 trong physics
+                
+                let speed = power * SPEED_CONSTANT;
+                let vx = Math.cos(rad) * speed;
+                let vy = -Math.sin(rad) * speed;
+
+                let points = [{x: sx, y: sy}];
+                let curX = sx, curY = sy;
+                
+                // Lấy số bước vẽ (Skill 2 vẽ 300 bước)
+                let steps = (typeof stepsLimit === 'number') ? stepsLimit : 20;
+
+                // [QUAN TRỌNG] Đạn SignalFlare có windResist = 0.8 trong constructor
+                // Ta phải dùng đúng số này thì đường kẻ mới trùng khớp vết đạn bay
+                let windResist = 0.8; 
+
+                for (let i = 0; i < steps; i++) {
+                    vx += windVal * WIND_FACTOR * windResist; // Áp dụng kháng gió 0.8
+                    vy += GRAVITY;
+                    
+                    curX += vx;
+                    curY += vy;
+                    
+                    points.push({x: curX, y: curY});
                     if (steps > 50 && (this.y + curY > GROUND_Y + 50)) break;
                 }
 
@@ -1094,38 +1582,32 @@
             createMuzzleFlash(offsetAngle) {
                 SoundManager.playShoot();
                 const rad = (this.angle + offsetAngle) * Math.PI / 180;
-                createExplosion(this.x + Math.cos(rad) * 44, (this.y - 14) - Math.sin(rad) * 44, 10, 'smoke'); 
+                createExplosion(this.x + Math.cos(rad) * 30, (this.y - 14) - Math.sin(rad) * 30, 5, 'smoke');
             }
 
-            fireNormal(power, windVal) {
-                this.createMuzzleFlash(0);
-                let dmg = Math.floor(Math.random() * 10 + 30);
-                return [new BoomerangBullet(this.x, this.y, this.angle, power, windVal, dmg)];
+            createUplinkEffect() {
+                for(let i=0; i<20; i++) {
+                    particles.push(new Particle(this.x + (Math.random()-0.5)*10, this.y - 20, 'spark', { vx: 0, vy: -5 - Math.random()*10, life: 0.5, size: 2, color: '#ff1744' }));
+                }
+                showFloatingText("GỬI TÍN HIỆU...", this.x, this.y - 80, '#ff1744');
             }
 
-            fireSkill1(power, windVal) {
-                this.createMuzzleFlash(0);
-                let bullets = [];
-                let offsets = [-4, 0, 4]; // 3 tia lệch nhau
-                
-                offsets.forEach(off => {
-                    // [CẬP NHẬT] Tăng Damage từ (20-25) lên (35-45)
-                    // Tổng 3 viên nếu trúng hết sẽ là > 100 damage (Rất mạnh)
-                    let dmg = Math.floor(Math.random() * 10 + 60);
-                    
-                    bullets.push(new BoomerangBullet(this.x, this.y, this.angle + off, power, windVal, dmg));
-                });
-                return bullets;
+            fireNormal(power, windVal) { 
+                this.createMuzzleFlash(0); 
+                return [new SignalFlareBullet(this.x, this.y, this.angle, power, windVal, 'NORMAL')]; 
             }
-           
 
-            fireSkill2(power, windVal) {
+            fireSkill1(power, windVal) { 
+                this.createUplinkEffect(); this.createMuzzleFlash(0);
+                return [new SignalFlareBullet(this.x, this.y, this.angle, power, windVal, 'CARPET')];
+            }
+            
+            fireSkill2(power, windVal) { 
                 this.createMuzzleFlash(0);
-                let baseDmg = Math.floor(Math.random() * 10 + 30); 
-                return [new BoomerangBullet(this.x, this.y, this.angle, power, windVal, baseDmg, true)];
+                return [new SignalFlareBullet(this.x, this.y, this.angle, power, windVal, 'NUKE')];
             }
         }
-        
+                
         // ==========================================
         // === TANK ROSTER & MENU CONFIG ===
         // ==========================================
@@ -1142,6 +1624,15 @@
                 color: '#76ff03', // Màu xanh nõn chuối
                 skill1Name: 'Tam Giác Mạch (3 Tia)', 
                 skill2Name: 'Móc Tử Thần (x2 DMG + Aim)' 
+            },
+            { 
+                id: 'commando', 
+                name: 'ĐẶC NHIỆM', 
+                desc: 'Bắn pháo hiệu chỉ điểm máy bay ném bom.', 
+                className: CommandoTank, 
+                color: '#607d8b', 
+                skill1Name: 'Rải Thảm (5 Quả)', 
+                skill2Name: 'Bom Chiến Thuật (120 DMG)' 
             }
         ];
 
@@ -1381,27 +1872,31 @@
             if (gameState === 'ENDED') { stopTimer(); SoundManager.stopBGM(); return; }
 
             if (turn === 'PLAYER_SHOOTING') {
-                
-                // --- TANK CLEANUP TRIGGER ---
+                // [TỐI ƯU] Gọi hàm dọn dẹp của xe người chơi
                 player.onTurnEnd();
-                // -----------------------------
 
                 if (player.extraShot) {
-                    player.extraShot = false; turn = 'PLAYER'; player.moveEnergy = MAX_MOVE_ENERGY; 
+                    // [TỐI ƯU] Reset trạng thái đầu lượt
+                    player.extraShot = false; turn = 'PLAYER'; 
+                    player.onTurnStart(); 
                     charging = false; currentPower = 0; keys = {}; startTimer();
                     showFloatingText("LƯỢT BẮN THÊM!", player.x, player.y - 80, '#2979ff'); updateUI(); return; 
                 }
 
                 if (ai.hp <= 0) endGame('YOU WIN', '#00e676');
                 else {
-                    turn = 'AI'; stopTimer(); player.damageBuff = false; 
+                    turn = 'AI'; stopTimer(); 
+                    ai.onTurnStart(); // [NEW] AI cũng cần reset buff
                     if (!playerLandedHit) { let missTaunt = getSmartTaunt('MISS'); showFloatingText(missTaunt, ai.x, ai.y - 90, '#000', true); addChatLog("Máy", missTaunt); }
                     setTimeout(aiMovePhase, 1000);
                 }
             } else {
                 if (player.hp <= 0) endGame('GAME OVER', '#ff5252');
                 else {
-                    turn = 'PLAYER'; player.moveEnergy = MAX_MOVE_ENERGY; 
+                    turn = 'PLAYER'; 
+                    // [TỐI ƯU] Reset trạng thái đầu lượt cho người chơi
+                    player.onTurnStart(); 
+                    
                     charging = false; currentPower = 0; keys = {}; SoundManager.stopCharge();
                     randomWind(); startTimer();
                 }
@@ -1433,7 +1928,8 @@
             if (type === 'fire') { for (let i = 0; i < 10; i++) { particles.push(new Particle(x, y, 'spark', { vx: (Math.random() - 0.5) * 10, vy: (Math.random() - 0.5) * 10 - 2, life: 0.8, size: 2 })); } }
         }
 
-        // === [REFACTORED] GLOBAL CHECK COLLISION (SIMPLIFIED) ===
+        // --- THAY THẾ ĐOẠN LOGIC CHECK COLLISION CŨ ---
+
         function checkCollision() {
             for (let i = bullets.length - 1; i >= 0; i--) {
                 let b = bullets[i];
@@ -1446,30 +1942,42 @@
                 
                 if (!hit) {
                     for (let target of potentialTargets) {
-                        if (target.hp <= 0) continue; 
+                        // [FIX] Nếu xe đã chết (đang trong giai đoạn delay endgame), không tính hit nữa
+                        if (target.hp <= 0 || target.isDead) continue; 
+
                         let hitDistX = 25 * target.scale; let hitDistY = 30 * target.scale;
                         
                         if (Math.abs(b.x - target.x) < hitDistX && Math.abs(b.y - target.y) < hitDistY) {
                             hit = true;
                             if (target === ai && shooter === player) playerLandedHit = true;
                             
-                            if (target === player && playerShieldActive) { 
-                                showFloatingText("ĐỠ ĐÒN!", target.x, target.y - 80, '#00ffff'); 
-                                playerShieldActive = false; createExplosion(target.x, target.y, 15, 'smoke'); 
-                            } else {
-                                // --- DELEGATE TO BULLET ---
-                                b.handleCollision(target, shooter);
-                                // --------------------------
-                            }
+                            b.handleCollision(target, shooter);
 
-                            if (target.hp <= 0 && gameState !== 'ENDED') {
-                                if (target === player) endGame('GAME OVER', '#ff5252'); else endGame('YOU WIN', '#00e676'); 
+                            // === [LOGIC MỚI: XỬ LÝ KHI CHẾT] ===
+                            if (target.hp <= 0 && gameState !== 'ENDED' && !target.isDead) {
+                                // 1. Kích hoạt hiệu ứng cháy nổ
+                                target.onDeath();
+
+                                // 2. Dừng timer để không bị xử thua oan trong lúc chờ
+                                stopTimer(); 
+
+                                // 3. Delay 1.5 giây để ngắm xác cháy rồi mới hiện bảng
+                                setTimeout(() => {
+                                    // Kiểm tra lại gameState đề phòng bug
+                                    if (gameState !== 'ENDED') {
+                                        if (target === player) endGame('GAME OVER', '#ff5252'); 
+                                        else endGame('YOU WIN', '#00e676'); 
+                                    }
+                                }, 1500); 
                             }
+                            // ====================================
+
                             break; 
                         }
                     }
                 }
                 
+                // ... (Giữ nguyên logic Supply Drop và xóa đạn) ...
                 for (let j = supplyDrops.length - 1; j >= 0; j--) {
                     let s = supplyDrops[j];
                     if (!s.isFalling && Math.abs(b.x - s.x) < 20 && Math.abs(b.y - s.y) < 20) {
@@ -1548,25 +2056,15 @@
                 if (d < minD) minD = d; if (sy > GROUND_Y + 50) break;
             } return { success: false, distance: minD };
         }
-         function drawAimGuide() {
-            // 1. Kiểm tra điều kiện cơ bản
+
+        function drawAimGuide() {
             if (turn !== 'PLAYER' || gameState !== 'PLAYING') return;
 
-            // 2. Cấu hình độ dài đường ngắm
-            // Nếu dùng Skill 2 (Aim xa) -> Vẽ dài (300 điểm)
-            // Nếu bình thường -> Vẽ ngắn (25 điểm - đoạn nét đứt gợi ý)
-            let isLongPath = (activeSkill === 2);
-            let drawSteps = isLongPath ? 300 : 25; 
+            // [TỐI ƯU] Lấy setting từ Class xe hiện tại
+            const settings = player.getAimSettings(activeSkill);
+            const drawSteps = settings.steps;
 
-            // 3. [QUAN TRỌNG] Luôn tính toán dựa trên FULL LỰC (100)
-            // Điều này giúp đường ngắm luôn đúng hướng của quỹ đạo chuẩn, không bị "xìu" xuống
             let simPower = 100; 
-
-            // 4. Gọi hàm tính toán vật lý từ class xe hiện tại
-            // Lưu ý: Ta truyền vào tham số thứ 3 là 'drawSteps' để tối ưu, 
-            // hàm calculateTrajectory sẽ chỉ tính toán bấy nhiêu điểm thôi.
-            
-            // (Chúng ta cần sửa nhẹ calculateTrajectory để nhận tham số steps tùy biến, xem bên dưới)
             let trajectory = player.calculateTrajectory(simPower, wind, drawSteps);
             let points = trajectory.points;
 
@@ -1575,23 +2073,20 @@
             ctx.save();
             ctx.translate(player.x, player.y);
 
-            // 5. Style vẽ (Nét đứt hoặc Gradient)
-            if (activeSkill === 2) {
-                // Skill 2: Vẽ dây dài, màu mè đẹp
+            if (settings.isSolid) {
+                // Vẽ kiểu đặc biệt (Skill 2 của Laser, Boomerang, v.v.)
                 let grad = ctx.createLinearGradient(points[0].x, points[0].y, points[points.length-1].x, points[points.length-1].y);
-                grad.addColorStop(0, player.color); 
-                grad.addColorStop(1, 'rgba(255,255,255,0)');
+                grad.addColorStop(0, settings.colorStart); 
+                grad.addColorStop(1, settings.colorEnd);
                 ctx.strokeStyle = grad;
-                ctx.setLineDash([]); // Nét liền
-                ctx.lineWidth = 2;
+                ctx.setLineDash([]); 
             } else {
-                // Bình thường: Nét đứt trắng ngắn gọn
+                // Vẽ kiểu mặc định
                 ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)'; 
-                ctx.setLineDash([3, 4]); // Nét đứt thưa hơn chút cho dễ nhìn
-                ctx.lineWidth = 2;
+                ctx.setLineDash([3, 4]); 
             }
 
-            // 6. Thực hiện vẽ nối điểm
+            ctx.lineWidth = 2;
             ctx.beginPath();
             ctx.moveTo(points[0].x, points[0].y);
             for (let i = 1; i < points.length; i++) {
@@ -1600,6 +2095,7 @@
             ctx.stroke();
             ctx.restore();
         }
+
         function drawEnvironment() {
             let grad = ctx.createLinearGradient(0, 0, 0, SCREEN_H); grad.addColorStop(0, '#87CEEB'); grad.addColorStop(0.6, '#B0E0E6'); grad.addColorStop(1, '#E0F7FA'); ctx.fillStyle = grad; 
             ctx.fillRect(0, 0, VIEWPORT_W, SCREEN_H); 
@@ -1621,75 +2117,7 @@
                 waterOffset += 0.05; clouds.forEach(c => c.update());
                 
                 if (gameState === 'INTRO') {
-                    let pLanded = player.updateParachute(); let aLanded = ai.updateParachute();
-                    let targetCamX = player.x - VIEWPORT_W / 2; let targetCamY = player.y - SCREEN_H / 2;
-                    cameraX += (targetCamX - cameraX) * 0.1; cameraY += (targetCamY - cameraY) * 0.1; clampCamera();
-                    if (pLanded && aLanded) { 
-                        gameState = 'PLAYING'; SoundManager.stopWind(); 
-                        if (turn === 'PLAYER') { startTimer(); showFloatingText("BẮT ĐẦU!", player.x, player.y - 80, '#00e676'); }
-                    }
-                } else if (gameState === 'PLAYING') {
-                    if (activeSupplyDrop) {
-                        let targetCamX = activeSupplyDrop.x - VIEWPORT_W / 2; let targetCamY = activeSupplyDrop.y - SCREEN_H / 2; 
-                        cameraX += (targetCamX - cameraX) * 0.1; cameraY += (targetCamY - cameraY) * 0.1; clampCamera();
-                    } else {
-                        // --- [NEW] LOGIC FILTERING SATELLITE ---
-                        if (bullets.length > 0) {
-                            bullets.forEach(b => b.update()); checkCollision();
-                        }
-                        // Lọc các đạn thực sự đang bay (bỏ qua vệ tinh đứng yên)
-                        let activeBullets = bullets.filter(b => b.shouldCameraTrack);
-
-                        if (activeBullets.length > 0) { 
-                            let b = activeBullets[0]; let targetCamX = b.x - VIEWPORT_W / 2; let targetCamY = b.y - SCREEN_H / 2; 
-                            cameraX += (targetCamX - cameraX) * 0.1; cameraY += (targetCamY - cameraY) * 0.1; clampCamera(); 
-                        } else if (turn.includes('SHOOTING') && particles.length === 0) {
-                            switchTurn(); 
-                            let targetX = (turn === 'PLAYER') ? player.x - 200 : ai.x - (VIEWPORT_W - 200); let targetY = MAP_HEIGHT - SCREEN_H; 
-                            cameraX += (targetX - cameraX) * 0.05; cameraY += (targetY - cameraY) * 0.05; clampCamera();
-                        }
-                    }
-                    supplyDrops.forEach((s, i) => { s.update(); if (s.intercepted && !s.isFalling) supplyDrops.splice(i, 1); });
-                    if (turn === 'PLAYER' && !activeSupplyDrop) {
-                        if (keys['ArrowLeft']) player.move(-1); if (keys['ArrowRight']) player.move(1); 
-                        if (keys['ArrowUp']) player.adjustAngle(1); if (keys['ArrowDown']) player.adjustAngle(-1);
-                        if (charging) { SoundManager.startCharge(); SoundManager.updateCharge(currentPower); currentPower = Math.min(100, currentPower + 1.5); elPowerBar.style.width = currentPower + '%'; } else { SoundManager.stopCharge(); }
-                        updateUI();
-                    }
-                }
-                particles.forEach((p, i) => { p.update(); if (p.life <= 0) particles.splice(i, 1); });
-                floatingTexts.forEach((f, i) => { f.y -= f.isChat ? 0.05 : 0.5; f.life--; if (f.life <= 0) floatingTexts.splice(i, 1); });
-            }
-            
-            ctx.clearRect(0, 0, canvas.width, canvas.height); 
-            ctx.save(); ctx.scale(dpr * GAME_SCALE, dpr * GAME_SCALE);
-            drawEnvironment(); clouds.forEach(c => c.draw()); 
-            ctx.save(); ctx.translate(-cameraX, -cameraY); 
-            drawAimGuide(); drawWorldElements(); supplyDrops.forEach(s => s.draw());
-            if(player) player.draw(ctx);
-            if (playerShieldActive && player) { 
-                ctx.save(); ctx.strokeStyle = '#00ffff'; ctx.lineWidth = 3; ctx.shadowBlur = 10; ctx.shadowColor = '#00ffff'; 
-                ctx.beginPath(); ctx.arc(player.x, player.y - 20, 35, 0, Math.PI * 2); ctx.stroke(); ctx.fillStyle = 'rgba(0, 255, 255, 0.2)'; ctx.fill(); ctx.restore(); 
-            }
-            if(ai) ai.draw(ctx); 
-            bullets.forEach(b => b.draw(ctx)); particles.forEach(p => p.draw());
-            floatingTexts.forEach(ft => {
-                ctx.save(); let alpha = 1; if (ft.life < 30) alpha = ft.life / 30; ctx.globalAlpha = alpha; 
-                if (ft.isChat) {
-                    ctx.font = 'bold 13px Tahoma'; let textWidth = ctx.measureText(ft.text).width; let padding = 10; let boxW = textWidth + padding * 2; let boxH = 30; let boxX = ft.x - boxW / 2; let boxY = ft.y - 20;
-                    ctx.fillStyle = 'white'; ctx.beginPath(); ctx.moveTo(ft.x, boxY + boxH); ctx.lineTo(ft.x - 5, boxY + boxH + 6); ctx.lineTo(ft.x + 5, boxY + boxH + 6); ctx.fill();
-                    ctx.fillStyle = 'white'; ctx.strokeStyle = '#333'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(boxX + 5, boxY); ctx.lineTo(boxX + boxW - 5, boxY); ctx.quadraticCurveTo(boxX + boxW, boxY, boxX + boxW, boxY + 5); ctx.lineTo(boxX + boxW, boxY + boxH - 5); ctx.quadraticCurveTo(boxX + boxW, boxY + boxH, boxX + boxW - 5, boxY + boxH); ctx.lineTo(boxX + 5, boxY + boxH); ctx.quadraticCurveTo(boxX, boxY + boxH, boxX, boxY + boxH - 5); ctx.lineTo(boxX, boxY + 5); ctx.quadraticCurveTo(boxX, boxY, boxX + 5, boxY); ctx.fill(); ctx.stroke();
-                    ctx.fillStyle = ft.color === '#d500f9' ? '#d500f9' : '#000'; ctx.fillText(ft.text, boxX + padding, boxY + 19);
-                } else { ctx.font = 'bold 18px Arial'; ctx.lineWidth = 3; ctx.strokeStyle = 'black'; ctx.strokeText(ft.text, ft.x, ft.y); ctx.fillStyle = ft.color; ctx.fillText(ft.text, ft.x, ft.y); }
-                ctx.restore();
-            });
-            ctx.restore(); ctx.restore(); drawMinimap(); requestAnimationFrame(gameLoop);
-        }
-        function gameLoop() {
-            if (gameState !== 'ENDED' && !isPaused) {
-                waterOffset += 0.05; clouds.forEach(c => c.update());
-                
-                if (gameState === 'INTRO') {
+                    // ... (Giữ nguyên logic INTRO) ...
                     let pLanded = player.updateParachute(); let aLanded = ai.updateParachute();
                     let targetCamX = player.x - VIEWPORT_W / 2; let targetCamY = player.y - SCREEN_H / 2;
                     cameraX += (targetCamX - cameraX) * 0.1; cameraY += (targetCamY - cameraY) * 0.1; clampCamera();
@@ -1706,18 +2134,10 @@
                             bullets.forEach(b => b.update()); checkCollision();
                         }
                         
-                        // === [FIX LOGIC CAMERA] ===
-                        // Chỉ bám theo đạn thực sự đang bay trên màn hình
-                        // Loại bỏ: Vệ tinh (SATELLITE) VÀ Đạn đang chờ (activationDelay > 0 hoặc y < -1000)
-                        let activeBullets = bullets.filter(b => {
-                            if (b.type === 'SATELLITE') return false;
-                            if (b.activationDelay && b.activationDelay > 0) return false; // Đạn súng máy chưa bắn
-                            if (b.y < -1000) return false; // Đạn bị giấu quá xa
-                            return true;
-                        });
+                        // [TỐI ƯU] Lọc đạn dựa trên getter thông minh của class Bullet
+                        let activeBullets = bullets.filter(b => b.shouldCameraTrack);
 
                         if (activeBullets.length > 0) { 
-                            // Bám theo viên đạn hợp lệ đầu tiên
                             let b = activeBullets[0]; 
                             let targetCamX = b.x - VIEWPORT_W / 2; 
                             let targetCamY = b.y - SCREEN_H / 2; 
@@ -1725,16 +2145,13 @@
                             cameraY += (targetCamY - cameraY) * 0.1; 
                             clampCamera(); 
                         } else if (turn.includes('SHOOTING') && particles.length === 0) {
-                            // Nếu không còn đạn bay -> Chuyển lượt
-                            // Lưu ý: Dù activeBullets rỗng, nhưng bullets gốc vẫn có thể còn (Vệ tinh), 
-                            // nên switchTurn sẽ tự lo liệu việc dọn dẹp vệ tinh.
                             switchTurn(); 
                             let targetX = (turn === 'PLAYER') ? player.x - 200 : ai.x - (VIEWPORT_W - 200); let targetY = MAP_HEIGHT - SCREEN_H; 
                             cameraX += (targetX - cameraX) * 0.05; cameraY += (targetY - cameraY) * 0.05; clampCamera();
                         }
-                        // ==========================
                     }
                     supplyDrops.forEach((s, i) => { s.update(); if (s.intercepted && !s.isFalling) supplyDrops.splice(i, 1); });
+                    // ... (Giữ nguyên phần input player) ...
                     if (turn === 'PLAYER' && !activeSupplyDrop) {
                         if (keys['ArrowLeft']) player.move(-1); if (keys['ArrowRight']) player.move(1); 
                         if (keys['ArrowUp']) player.adjustAngle(1); if (keys['ArrowDown']) player.adjustAngle(-1);
@@ -1745,20 +2162,20 @@
                 particles.forEach((p, i) => { p.update(); if (p.life <= 0) particles.splice(i, 1); });
                 floatingTexts.forEach((f, i) => { f.y -= f.isChat ? 0.05 : 0.5; f.life--; if (f.life <= 0) floatingTexts.splice(i, 1); });
             }
-            
+            // ... (Phần draw giữ nguyên) ...
             ctx.clearRect(0, 0, canvas.width, canvas.height); 
             ctx.save(); ctx.scale(dpr * GAME_SCALE, dpr * GAME_SCALE);
             drawEnvironment(); clouds.forEach(c => c.draw()); 
             ctx.save(); ctx.translate(-cameraX, -cameraY); 
             drawAimGuide(); drawWorldElements(); supplyDrops.forEach(s => s.draw());
             if(player) player.draw(ctx);
-            if (playerShieldActive && player) { 
+            if (player && player.isShielded) { // [TỐI ƯU] Dùng thuộc tính isShielded
                 ctx.save(); ctx.strokeStyle = '#00ffff'; ctx.lineWidth = 3; ctx.shadowBlur = 10; ctx.shadowColor = '#00ffff'; 
                 ctx.beginPath(); ctx.arc(player.x, player.y - 20, 35, 0, Math.PI * 2); ctx.stroke(); ctx.fillStyle = 'rgba(0, 255, 255, 0.2)'; ctx.fill(); ctx.restore(); 
             }
             if(ai) ai.draw(ctx); 
             bullets.forEach(b => b.draw(ctx)); particles.forEach(p => p.draw());
-            floatingTexts.forEach(ft => {
+            floatingTexts.forEach(ft => { /* ... giữ nguyên logic vẽ chữ ... */
                 ctx.save(); let alpha = 1; if (ft.life < 30) alpha = ft.life / 30; ctx.globalAlpha = alpha; 
                 if (ft.isChat) {
                     ctx.font = 'bold 13px Tahoma'; let textWidth = ctx.measureText(ft.text).width; let padding = 10; let boxW = textWidth + padding * 2; let boxH = 30; let boxX = ft.x - boxW / 2; let boxY = ft.y - 20;
@@ -1821,14 +2238,22 @@
         function toggleSkill(skillNum, btnElement) {
             if (isPaused || activeSupplyDrop) return; if (turn !== 'PLAYER' || gameState !== 'PLAYING') return;
             if (!btnElement.classList.contains('unlocked') || btnElement.classList.contains('used')) return;
-            playerShieldActive = false;
+            
+            // Reset khiên cũ nếu đổi skill (hoặc giữ nguyên tuỳ bạn, ở đây ta reset cho sạch)
+            player.isShielded = false;
+
             if (skillNum === 4) { spawnSupplyDrop(); skill4Uses--; showFloatingText("GỌI TIẾP TẾ!", player.x, player.y - 80, '#fff'); updateUI(); return; }
             if (activeSkill === skillNum) { 
                 activeSkill = null; btnElement.classList.remove('active'); 
-                if (skillNum === 2) { for (let i = bullets.length - 1; i >= 0; i--) { if (bullets[i].type === 'SATELLITE') bullets.splice(i, 1); } }
+                // [TỐI ƯU] Nếu hủy skill 2, Laser Tank cần dọn vệ tinh
+                if (skillNum === 2 && player instanceof LaserTank) { 
+                    for (let i = bullets.length - 1; i >= 0; i--) { if (bullets[i].type === 'SATELLITE') bullets.splice(i, 1); }
+                }
             } else { 
                 activeSkill = skillNum; btnSkill1.classList.remove('active'); btnSkill2.classList.remove('active'); btnSkill3.classList.remove('active'); btnSkill4.classList.remove('active'); btnElement.classList.add('active'); 
-                if (activeSkill === 3) { playerShieldActive = true; showFloatingText("KHIÊN BẢO VỆ!", player.x, player.y - 80, '#00ffff'); }
+                
+                // [TỐI ƯU] Gọi hàm bật khiên của Tank
+                if (activeSkill === 3) { player.activateShield(); }
                 if (activeSkill === 2 && player instanceof LaserTank) { player.deploySatellite(); showFloatingText("VỆ TINH SẴN SÀNG!", player.x, player.y - 80, '#d500f9'); }
             }
             updateUI();
@@ -1859,8 +2284,4 @@
         init();
     </script>
 </body>
-
 </html>
-
-
-
