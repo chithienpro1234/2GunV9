@@ -92,6 +92,19 @@
         .nav-btn:hover { background: rgba(255,255,255,0.2); border-color: #fff; }
         .nav-btn:active { transform: scale(0.95); }
 
+        /* --- THÊM STYLE CHO VẠCH LỰC CŨ --- */
+        #last-power-marker {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 2px; /* Độ dày vạch */
+            background-color: #fff; /* Màu trắng nổi bật */
+            box-shadow: 0 0 4px #000; /* Bóng đen để dễ nhìn trên nền sáng */
+            z-index: 5;
+            display: none; /* Mặc định ẩn */
+            pointer-events: none;
+        }
+
         @media (max-width: 600px) { 
             .menu-title { font-size: 22px; } .diff-btn { width: 80%; font-size: 16px; } 
             .hud-top-left { width: 175px; gap: 4px; } .stat-box { padding: 4px 4px; font-size: 9px; } .bar-label { width: 40px; font-size: 9px; } 
@@ -186,6 +199,7 @@
                         <span class="bar-label">Lực</span>
                         <div class="progress-track">
                             <div class="progress-fill fill-power" id="power-bar"></div>
+                            <div id="last-power-marker"></div> 
                         </div>
                     </div>
                 </div>
@@ -294,6 +308,7 @@
         const elHp = document.getElementById('hp-val');
         const elMoveBar = document.getElementById('move-bar');
         const elPowerBar = document.getElementById('power-bar');
+        const elLastPowerMarker = document.getElementById('last-power-marker');
         const elTurnText = document.getElementById('turn-text');
         const elModeText = document.getElementById('mode-text');
         const elTimerText = document.getElementById('timer-text');
@@ -997,13 +1012,11 @@
                 this.moveEnergy = MAX_MOVE_ENERGY;
                 this.damageBuff = false;
                 this.isShielded = false;
-                // Có thể reset các buff tạm thời khác tại đây
             }
 
             // [NEW] Hàm gọi khi kết thúc lượt (dọn dẹp)
             onTurnEnd() {
-                // this.isShielded = false; 
-                // Mất khiên khi hết lượt đối thủ (hoặc hết lượt mình, tùy logic)
+                // this.isShielded = false;
             }
 
             // [NEW] Hàm xử lý khi xe bị tiêu diệt
@@ -2221,20 +2234,72 @@
             if (act !== 'fire') { keys[act] = true; } else if (gameState === 'PLAYING') { charging = true; currentPower = 0; }
         }
         function handleEnd(act) {
-            if (isPaused || activeSupplyDrop) return; if (turn !== 'PLAYER' || gameState !== 'PLAYING') { charging = false; return; }
-            if (act !== 'fire') { keys[act] = false; }
+            // 1. Kiểm tra điều kiện chặn: Tạm dừng hoặc đang nhặt hòm
+            if (isPaused || activeSupplyDrop) return; 
+            
+            // 2. Kiểm tra lượt: Nếu không phải lượt người chơi hoặc game chưa chạy -> Hủy sạc
+            if (turn !== 'PLAYER' || gameState !== 'PLAYING') { 
+                charging = false; 
+                return; 
+            }
+
+            // 3. Xử lý phím di chuyển (nhả phím mũi tên)
+            if (act !== 'fire') { 
+                keys[act] = false; 
+            }
+            // 4. Xử lý nút BẮN (nhả nút Space hoặc nút Bắn trên màn hình)
             else if (gameState === 'PLAYING') {
-                charging = false; SoundManager.stopCharge();
+                charging = false; 
+                SoundManager.stopCharge();
+
+                // Chỉ bắn nếu lực > 5 (tránh nhấp nhầm)
                 if (currentPower > 5) {
-                    stopTimer(); playerLandedHit = false; turn = 'PLAYER_SHOOTING';
+                    
+                    // --- [MỚI] LƯU LẠI VẠCH LỰC CŨ ---
+                    if (typeof elLastPowerMarker !== 'undefined' && elLastPowerMarker) {
+                        elLastPowerMarker.style.display = 'block';
+                        elLastPowerMarker.style.left = currentPower + '%';
+                    }
+                    // ---------------------------------
+
+                    stopTimer(); 
+                    playerLandedHit = false; 
+                    turn = 'PLAYER_SHOOTING';
+
                     let newBullets = [];
-                    if (activeSkill === 1) { newBullets = player.fireSkill1(currentPower, wind); skill1Used = true; }
-                    else if (activeSkill === 2) { newBullets = player.fireSkill2(currentPower, wind); skill2Used = true; }
-                    else if (activeSkill === 3) { newBullets = player.fireNormal(currentPower, wind); skill3Used = true; }
-                    else { newBullets = player.fireNormal(currentPower, wind); }
+                    // Kiểm tra Skill nào đang bật để bắn loại đạn tương ứng
+                    if (activeSkill === 1) { 
+                        newBullets = player.fireSkill1(currentPower, wind); 
+                        skill1Used = true; 
+                    }
+                    else if (activeSkill === 2) { 
+                        newBullets = player.fireSkill2(currentPower, wind); 
+                        skill2Used = true; 
+                    }
+                    else if (activeSkill === 3) { 
+                        // Skill 3 thường là Khiên (đã kích hoạt lúc bấm nút), bắn đạn thường
+                        newBullets = player.fireNormal(currentPower, wind); 
+                        skill3Used = true; 
+                    }
+                    else { 
+                        // Bắn thường
+                        newBullets = player.fireNormal(currentPower, wind); 
+                    }
+
                     bullets.push(...newBullets);
-                    activeSkill = null; btnSkill1.classList.remove('active'); btnSkill2.classList.remove('active'); btnSkill3.classList.remove('active'); btnSkill4.classList.remove('active'); updateUI();
-                } else { currentPower = 0; updateUI(); }
+                    
+                    // Reset trạng thái Skill và UI
+                    activeSkill = null; 
+                    btnSkill1.classList.remove('active'); 
+                    btnSkill2.classList.remove('active'); 
+                    btnSkill3.classList.remove('active'); 
+                    btnSkill4.classList.remove('active'); 
+                    updateUI();
+                } else { 
+                    // Nếu lực quá yếu thì hủy bắn, reset về 0
+                    currentPower = 0; 
+                    updateUI(); 
+                }
             }
         }
         function toggleSkill(skillNum, btnElement) {
@@ -2287,4 +2352,3 @@
     </script>
 </body>
 </html>
-
