@@ -996,12 +996,14 @@
             onTurnStart() {
                 this.moveEnergy = MAX_MOVE_ENERGY;
                 this.damageBuff = false;
+                this.isShielded = false;
                 // Có thể reset các buff tạm thời khác tại đây
             }
 
             // [NEW] Hàm gọi khi kết thúc lượt (dọn dẹp)
             onTurnEnd() {
-                this.isShielded = false; // Mất khiên khi hết lượt đối thủ (hoặc hết lượt mình, tùy logic)
+                // this.isShielded = false; 
+                // Mất khiên khi hết lượt đối thủ (hoặc hết lượt mình, tùy logic)
             }
 
             // [NEW] Hàm xử lý khi xe bị tiêu diệt
@@ -2285,3 +2287,4 @@
     </script>
 </body>
 </html>
+
